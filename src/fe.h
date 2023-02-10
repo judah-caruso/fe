@@ -11,29 +11,30 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-#define FE_VERSION "1.0"
+#define FE_VERSION "1.1"
 
 typedef float fe_Number;
 typedef struct fe_Object fe_Object;
 typedef struct fe_Context fe_Context;
 typedef fe_Object* (*fe_CFunc)(fe_Context *ctx, fe_Object *args);
-typedef void (*fe_ErrorFn)(fe_Context *ctx, const char *err, fe_Object *cl);
+typedef int  (*fe_ErrorFn)(fe_Context *ctx, const char *err, fe_Object *cl);
 typedef void (*fe_WriteFn)(fe_Context *ctx, void *udata, char chr);
 typedef char (*fe_ReadFn)(fe_Context *ctx, void *udata);
 typedef struct { fe_ErrorFn error; fe_CFunc mark, gc; } fe_Handlers;
 
-enum {
-  FE_TPAIR, FE_TFREE, FE_TNIL, FE_TNUMBER, FE_TSYMBOL, FE_TSTRING,
-  FE_TFUNC, FE_TMACRO, FE_TPRIM, FE_TCFUNC, FE_TPTR
-};
+typedef enum {
+  TPAIR, TFREE,  TNIL,  TNUMBER, TSYMBOL, TSTRING,
+  TFUNC, TMACRO, TPRIM, TCFUNC,  TPTR
+} fe_Type;
 
 fe_Context* fe_open(void *ptr, int size);
 void fe_close(fe_Context *ctx);
 fe_Handlers* fe_handlers(fe_Context *ctx);
 void fe_error(fe_Context *ctx, const char *msg);
 fe_Object* fe_nextarg(fe_Context *ctx, fe_Object **arg);
-int fe_type(fe_Context *ctx, fe_Object *obj);
+fe_Type fe_type(fe_Context *ctx, fe_Object *obj);
 int fe_isnil(fe_Context *ctx, fe_Object *obj);
+int fe_isdefined(fe_Context *ctx, const char *name);
 void fe_pushgc(fe_Context *ctx, fe_Object *obj);
 void fe_restoregc(fe_Context *ctx, int idx);
 int fe_savegc(fe_Context *ctx);

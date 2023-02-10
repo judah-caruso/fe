@@ -28,7 +28,7 @@
 #define cdr(x)        ( (x)->cdr.o )
 #define tag(x)        ( (x)->car.c )
 #define isnil(x)      ( (x) == &nil )
-#define type(x)       ( tag(x) & 0x1 ? tag(x) >> 2 : FE_TPAIR )
+#define type(x)       ( tag(x) & 0x1 ? (fe_Type)(tag(x) >> 2) : TPAIR )
 #define settype(x,t)  ( tag(x) = (t) << 2 | 1 )
 #define number(x)     ( (x)->cdr.n )
 #define prim(x)       ( (x)->cdr.c )
@@ -41,20 +41,20 @@
 
 
 enum {
- P_LET, P_SET, P_IF, P_FN, P_MAC, P_WHILE, P_QUOTE, P_AND, P_OR, P_DO, P_CONS,
- P_CAR, P_CDR, P_SETCAR, P_SETCDR, P_LIST, P_NOT, P_IS, P_ATOM, P_PRINT, P_LT,
- P_LTE, P_ADD, P_SUB, P_MUL, P_DIV, P_MAX
+ P_LET, P_SET, P_IF,     P_FN,     P_MAC,  P_WHILE, P_QUOTE, P_AND,  P_OR,    P_DO, P_CONS,
+ P_CAR, P_CDR, P_SETCAR, P_SETCDR, P_LIST, P_NOT,   P_IS,    P_ATOM, P_PRINT, P_LT,
+ P_LTE, P_ADD, P_SUB,    P_MUL,    P_DIV,  P_MAX
 };
 
 static const char *primnames[] = {
-  "let", "=", "if", "fn", "mac", "while", "quote", "and", "or", "do", "cons",
-  "car", "cdr", "setcar", "setcdr", "list", "not", "is", "atom", "print", "<",
-  "<=", "+", "-", "*", "/"
+  "let", "=",   "if",     "fn",     "mac",  "while", "quote", "and",  "or",    "do", "cons",
+  "car", "cdr", "setcar", "setcdr", "list", "not",   "is",    "atom", "print", "<",
+  "<=",  "+",   "-",      "*", "/"
 };
 
 static const char *typenames[] = {
-  "pair", "free", "nil", "number", "symbol", "string",
-  "func", "macro", "prim", "cfunc", "ptr"
+  "pair", "free",  "nil",  "number", "symbol", "string",
+  "func", "macro", "prim", "cfunc",  "ptr"
 };
 
 typedef union { fe_Object *o; fe_CFunc f; fe_Number n; char c; } Value;
@@ -74,7 +74,7 @@ struct fe_Context {
   int nextchr;
 };
 
-static fe_Object nil = {{ (void*) (FE_TNIL << 2 | 1) }, { NULL }};
+static fe_Object nil = {{ (void*) (TNIL << 2 | 1) }, { NULL }};
 
 
 fe_Handlers* fe_handlers(fe_Context *ctx) {
@@ -86,8 +86,13 @@ void fe_error(fe_Context *ctx, const char *msg) {
   fe_Object *cl = ctx->calllist;
   /* reset context state */
   ctx->calllist = &nil;
+
   /* do error handler */
-  if (ctx->handlers.error) { ctx->handlers.error(ctx, msg, cl); }
+  if (ctx->handlers.error) {
+    int handled = ctx->handlers.error(ctx, msg, cl);
+    if (handled) return;
+  }
+
   /* error handler returned -- print error and traceback, exit */
   fprintf(stderr, "error: %s\n", msg);
   for (; !isnil(cl); cl = cdr(cl)) {
@@ -95,13 +100,14 @@ void fe_error(fe_Context *ctx, const char *msg) {
     fe_tostring(ctx, car(cl), buf, sizeof(buf));
     fprintf(stderr, "=> %s\n", buf);
   }
+
   exit(EXIT_FAILURE);
 }
 
 
 fe_Object* fe_nextarg(fe_Context *ctx, fe_Object **arg) {
   fe_Object *a = *arg;
-  if (type(a) != FE_TPAIR) {
+  if (type(a) != TPAIR) {
     if (isnil(a)) { fe_error(ctx, "too few arguments"); }
     fe_error(ctx, "dotted pair in argument list");
   }
@@ -110,7 +116,7 @@ fe_Object* fe_nextarg(fe_Context *ctx, fe_Object **arg) {
 }
 
 
-static fe_Object* checktype(fe_Context *ctx, fe_Object *obj, int type) {
+static fe_Object* checktype(fe_Context *ctx, fe_Object *obj, fe_Type type) {
   char buf[64];
   if (type(obj) != type) {
     sprintf(buf, "expected %s, got %s", typenames[type], typenames[type(obj)]);
@@ -120,7 +126,7 @@ static fe_Object* checktype(fe_Context *ctx, fe_Object *obj, int type) {
 }
 
 
-int fe_type(fe_Context *ctx, fe_Object *obj) {
+fe_Type fe_type(fe_Context *ctx, fe_Object *obj) {
   unused(ctx);
   return type(obj);
 }
@@ -158,14 +164,14 @@ begin:
   tag(obj) |= GCMARKBIT;
 
   switch (type(obj)) {
-    case FE_TPAIR:
+    case TPAIR:
       fe_mark(ctx, car);
       /* fall through */
-    case FE_TFUNC: case FE_TMACRO: case FE_TSYMBOL: case FE_TSTRING:
+    case TFUNC: case TMACRO: case TSYMBOL: case TSTRING:
       obj = cdr(obj);
       goto begin;
 
-    case FE_TPTR:
+    case TPTR:
       if (ctx->handlers.mark) { ctx->handlers.mark(ctx, obj); }
       break;
   }
@@ -182,12 +188,12 @@ static void collectgarbage(fe_Context *ctx) {
   /* sweep and unmark */
   for (i = 0; i < ctx->object_count; i++) {
     fe_Object *obj = &ctx->objects[i];
-    if (type(obj) == FE_TFREE) { continue; }
+    if (type(obj) == TFREE) { continue; }
     if (~tag(obj) & GCMARKBIT) {
-      if (type(obj) == FE_TPTR && ctx->handlers.gc) {
+      if (type(obj) == TPTR && ctx->handlers.gc) {
         ctx->handlers.gc(ctx, obj);
       }
-      settype(obj, FE_TFREE);
+      settype(obj, TFREE);
       cdr(obj) = ctx->freelist;
       ctx->freelist = obj;
     } else {
@@ -200,8 +206,8 @@ static void collectgarbage(fe_Context *ctx) {
 static int equal(fe_Object *a, fe_Object *b) {
   if (a == b) { return 1; }
   if (type(a) != type(b)) { return 0; }
-  if (type(a) == FE_TNUMBER) { return number(a) == number(b); }
-  if (type(a) == FE_TSTRING) {
+  if (type(a) == TNUMBER) { return number(a) == number(b); }
+  if (type(a) == TSTRING) {
     for (; !isnil(a); a = cdr(a), b = cdr(b)) {
       if (car(a) != car(b)) { return 0; }
     }
@@ -254,7 +260,7 @@ fe_Object* fe_bool(fe_Context *ctx, int b) {
 
 fe_Object* fe_number(fe_Context *ctx, fe_Number n) {
   fe_Object *obj = object(ctx);
-  settype(obj, FE_TNUMBER);
+  settype(obj, TNUMBER);
   number(obj) = n;
   return obj;
 }
@@ -263,7 +269,7 @@ fe_Object* fe_number(fe_Context *ctx, fe_Number n) {
 static fe_Object* buildstring(fe_Context *ctx, fe_Object *tail, int chr) {
   if (!tail || strbuf(tail)[STRBUFSIZE - 1] != '\0') {
     fe_Object *obj = fe_cons(ctx, NULL, &nil);
-    settype(obj, FE_TSTRING);
+    settype(obj, TSTRING);
     if (tail) {
       cdr(tail) = obj;
       ctx->gcstack_idx--;
@@ -285,6 +291,18 @@ fe_Object* fe_string(fe_Context *ctx, const char *str) {
 }
 
 
+int fe_isdefined(fe_Context *ctx, const char *name) {
+  fe_Object *obj;
+  for (obj = ctx->symlist; !isnil(obj); obj = cdr(obj)) {
+    if (streq(car(cdr(car(obj))), name)) {
+      return 1;
+    }
+  }
+  
+  return 0;
+}
+
+
 fe_Object* fe_symbol(fe_Context *ctx, const char *name) {
   fe_Object *obj;
   /* try to find in symlist */
@@ -295,7 +313,7 @@ fe_Object* fe_symbol(fe_Context *ctx, const char *name) {
   }
   /* create new object, push to symlist and return */
   obj = object(ctx);
-  settype(obj, FE_TSYMBOL);
+  settype(obj, TSYMBOL);
   cdr(obj) = fe_cons(ctx, fe_string(ctx, name), &nil);
   ctx->symlist = fe_cons(ctx, obj, ctx->symlist);
   return obj;
@@ -304,7 +322,7 @@ fe_Object* fe_symbol(fe_Context *ctx, const char *name) {
 
 fe_Object* fe_cfunc(fe_Context *ctx, fe_CFunc fn) {
   fe_Object *obj = object(ctx);
-  settype(obj, FE_TCFUNC);
+  settype(obj, TCFUNC);
   cfunc(obj) = fn;
   return obj;
 }
@@ -312,7 +330,7 @@ fe_Object* fe_cfunc(fe_Context *ctx, fe_CFunc fn) {
 
 fe_Object* fe_ptr(fe_Context *ctx, void *ptr) {
   fe_Object *obj = object(ctx);
-  settype(obj, FE_TPTR);
+  settype(obj, TPTR);
   cdr(obj) = ptr;
   return obj;
 }
@@ -329,13 +347,13 @@ fe_Object* fe_list(fe_Context *ctx, fe_Object **objs, int n) {
 
 fe_Object* fe_car(fe_Context *ctx, fe_Object *obj) {
   if (isnil(obj)) { return obj; }
-  return car(checktype(ctx, obj, FE_TPAIR));
+  return car(checktype(ctx, obj, TPAIR));
 }
 
 
 fe_Object* fe_cdr(fe_Context *ctx, fe_Object *obj) {
   if (isnil(obj)) { return obj; }
-  return cdr(checktype(ctx, obj, FE_TPAIR));
+  return cdr(checktype(ctx, obj, TPAIR));
 }
 
 
@@ -347,21 +365,21 @@ void fe_write(fe_Context *ctx, fe_Object *obj, fe_WriteFn fn, void *udata, int q
   char buf[32];
 
   switch (type(obj)) {
-    case FE_TNIL:
+    case TNIL:
       writestr(ctx, fn, udata, "nil");
       break;
 
-    case FE_TNUMBER:
+    case TNUMBER:
       sprintf(buf, "%.7g", number(obj));
       writestr(ctx, fn, udata, buf);
       break;
 
-    case FE_TPAIR:
+    case TPAIR:
       fn(ctx, udata, '(');
       for (;;) {
         fe_write(ctx, car(obj), fn, udata, 1);
         obj = cdr(obj);
-        if (type(obj) != FE_TPAIR) { break; }
+        if (type(obj) != TPAIR) { break; }
         fn(ctx, udata, ' ');
       }
       if (!isnil(obj)) {
@@ -371,11 +389,11 @@ void fe_write(fe_Context *ctx, fe_Object *obj, fe_WriteFn fn, void *udata, int q
       fn(ctx, udata, ')');
       break;
 
-    case FE_TSYMBOL:
+    case TSYMBOL:
       fe_write(ctx, car(cdr(obj)), fn, udata, 0);
       break;
 
-    case FE_TSTRING:
+    case TSTRING:
       if (qt) { fn(ctx, udata, '"'); }
       while (!isnil(obj)) {
         int i;
@@ -425,12 +443,12 @@ int fe_tostring(fe_Context *ctx, fe_Object *obj, char *dst, int size) {
 
 
 fe_Number fe_tonumber(fe_Context *ctx, fe_Object *obj) {
-  return number(checktype(ctx, obj, FE_TNUMBER));
+  return number(checktype(ctx, obj, TNUMBER));
 }
 
 
 void* fe_toptr(fe_Context *ctx, fe_Object *obj) {
-  return cdr(checktype(ctx, obj, FE_TPTR));
+  return cdr(checktype(ctx, obj, TPTR));
 }
 
 
@@ -487,7 +505,7 @@ static fe_Object* read_(fe_Context *ctx, fe_ReadFn fn, void *udata) {
       fe_pushgc(ctx, res); /* to cause error on too-deep nesting */
       while ( (v = read_(ctx, fn, udata)) != &rparen ) {
         if (v == NULL) { fe_error(ctx, "unclosed list"); }
-        if (type(v) == FE_TSYMBOL && streq(car(cdr(v)), ".")) {
+        if (type(v) == TSYMBOL && streq(car(cdr(v)), ".")) {
           /* dotted pair */
           *tail = fe_read(ctx, fn, udata);
         } else {
@@ -583,7 +601,7 @@ static fe_Object* dolist(fe_Context *ctx, fe_Object *lst, fe_Object *env) {
 
 static fe_Object* argstoenv(fe_Context *ctx, fe_Object *prm, fe_Object *arg, fe_Object *env) {
   while (!isnil(prm)) {
-    if (type(prm) != FE_TPAIR) {
+    if (type(prm) != TPAIR) {
       env = fe_cons(ctx, fe_cons(ctx, prm, arg), env);
       break;
     }
@@ -606,8 +624,8 @@ static fe_Object* argstoenv(fe_Context *ctx, fe_Object *prm, fe_Object *arg, fe_
   }
 
 #define numcmpop(op) {                            \
-    va = checktype(ctx, evalarg(), FE_TNUMBER);   \
-    vb = checktype(ctx, evalarg(), FE_TNUMBER);   \
+    va = checktype(ctx, evalarg(), TNUMBER);   \
+    vb = checktype(ctx, evalarg(), TNUMBER);   \
     res = fe_bool(ctx, number(va) op number(vb)); \
   }
 
@@ -617,8 +635,8 @@ static fe_Object* eval(fe_Context *ctx, fe_Object *obj, fe_Object *env, fe_Objec
   fe_Object cl, *va, *vb;
   int n, gc;
 
-  if (type(obj) == FE_TSYMBOL) { return cdr(getbound(obj, env)); }
-  if (type(obj) != FE_TPAIR) { return obj; }
+  if (type(obj) == TSYMBOL) { return cdr(getbound(obj, env)); }
+  if (type(obj) != TPAIR) { return obj; }
 
   car(&cl) = obj, cdr(&cl) = ctx->calllist;
   ctx->calllist = &cl;
@@ -629,17 +647,17 @@ static fe_Object* eval(fe_Context *ctx, fe_Object *obj, fe_Object *env, fe_Objec
   res = &nil;
 
   switch (type(fn)) {
-    case FE_TPRIM:
+    case TPRIM:
       switch (prim(fn)) {
         case P_LET:
-          va = checktype(ctx, fe_nextarg(ctx, &arg), FE_TSYMBOL);
+          va = checktype(ctx, fe_nextarg(ctx, &arg), TSYMBOL);
           if (newenv) {
             *newenv = fe_cons(ctx, fe_cons(ctx, va, evalarg()), env);
           }
           break;
 
         case P_SET:
-          va = checktype(ctx, fe_nextarg(ctx, &arg), FE_TSYMBOL);
+          va = checktype(ctx, fe_nextarg(ctx, &arg), TSYMBOL);
           cdr(getbound(va, env)) = evalarg();
           break;
 
@@ -659,7 +677,7 @@ static fe_Object* eval(fe_Context *ctx, fe_Object *obj, fe_Object *env, fe_Objec
           va = fe_cons(ctx, env, arg);
           fe_nextarg(ctx, &arg);
           res = object(ctx);
-          settype(res, prim(fn) == P_FN ? FE_TFUNC : FE_TMACRO);
+          settype(res, prim(fn) == P_FN ? TFUNC : TMACRO);
           cdr(res) = va;
           break;
 
@@ -702,12 +720,12 @@ static fe_Object* eval(fe_Context *ctx, fe_Object *obj, fe_Object *env, fe_Objec
           break;
 
         case P_SETCAR:
-          va = checktype(ctx, evalarg(), FE_TPAIR);
+          va = checktype(ctx, evalarg(), TPAIR);
           car(va) = evalarg();
           break;
 
         case P_SETCDR:
-          va = checktype(ctx, evalarg(), FE_TPAIR);
+          va = checktype(ctx, evalarg(), TPAIR);
           cdr(va) = evalarg();
           break;
 
@@ -725,7 +743,7 @@ static fe_Object* eval(fe_Context *ctx, fe_Object *obj, fe_Object *env, fe_Objec
           break;
 
         case P_ATOM:
-          res = fe_bool(ctx, fe_type(ctx, evalarg()) != FE_TPAIR);
+          res = fe_bool(ctx, fe_type(ctx, evalarg()) != TPAIR);
           break;
 
         case P_PRINT:
@@ -745,18 +763,18 @@ static fe_Object* eval(fe_Context *ctx, fe_Object *obj, fe_Object *env, fe_Objec
       }
       break;
 
-    case FE_TCFUNC:
+    case TCFUNC:
       res = cfunc(fn)(ctx, evallist(ctx, arg, env));
       break;
 
-    case FE_TFUNC:
+    case TFUNC:
       arg = evallist(ctx, arg, env);
       va = cdr(fn); /* (env params ...) */
       vb = cdr(va); /* (params ...) */
       res = dolist(ctx, cdr(vb), argstoenv(ctx, car(vb), arg, car(va)));
       break;
 
-    case FE_TMACRO:
+    case TMACRO:
       va = cdr(fn); /* (env params ...) */
       vb = cdr(va); /* (params ...) */
       /* replace caller object with code generated by macro and re-eval */
@@ -803,7 +821,7 @@ fe_Context* fe_open(void *ptr, int size) {
   /* populate freelist */
   for (i = 0; i < ctx->object_count; i++) {
     fe_Object *obj = &ctx->objects[i];
-    settype(obj, FE_TFREE);
+    settype(obj, TFREE);
     cdr(obj) = ctx->freelist;
     ctx->freelist = obj;
   }
@@ -816,7 +834,7 @@ fe_Context* fe_open(void *ptr, int size) {
   save = fe_savegc(ctx);
   for (i = 0; i < P_MAX; i++) {
     fe_Object *v = object(ctx);
-    settype(v, FE_TPRIM);
+    settype(v, TPRIM);
     prim(v) = i;
     fe_set(ctx, fe_symbol(ctx, primnames[i]), v);
     fe_restoregc(ctx, save);
@@ -838,13 +856,12 @@ void fe_close(fe_Context *ctx) {
 
 #include <setjmp.h>
 
-static jmp_buf toplevel;
 static char buf[64000];
 
-static void onerror(fe_Context *ctx, const char *msg, fe_Object *cl) {
+static int onerror(fe_Context *ctx, const char *msg, fe_Object *cl) {
   unused(ctx), unused(cl);
   fprintf(stderr, "error: %s\n", msg);
-  longjmp(toplevel, -1);
+  return 0;
 }
 
 
@@ -862,7 +879,6 @@ int main(int argc, char **argv) {
 
   if (fp == stdin) { fe_handlers(ctx)->error = onerror; }
   gc = fe_savegc(ctx);
-  setjmp(toplevel);
 
   /* re(p)l */
   for (;;) {
